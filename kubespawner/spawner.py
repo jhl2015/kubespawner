@@ -41,7 +41,7 @@ from jinja2 import Environment, BaseLoader
 
 from .clients import shared_client
 from kubespawner.traitlets import Callable
-from kubespawner.objects import make_pod, make_pvc
+from kubespawner.objects import make_pod, make_pvc, make_service
 from kubespawner.reflector import NamespacedResourceReflector
 from slugify import slugify
 
@@ -268,6 +268,18 @@ class KubeSpawner(Spawner):
                 return f.read().strip()
         return 'default'
 
+    services_enabled = Bool(
+        False,
+        config=True,
+        help="""
+        Enable fronting the user pods with a kubernetes service.
+        
+        This is useful in cases when network rules don't allow direct traffic
+        routing to pods in a cluster. Should be enabled when using jupyterhub
+        with a service mesh like istio with mTLS enabled.
+        """
+    )
+    
     ip = Unicode(
         '0.0.0.0',
         config=True,
@@ -1451,12 +1463,15 @@ class KubeSpawner(Spawner):
         labels = {}
         labels.update(extra_labels)
         labels.update(self.common_labels)
+        labels.update({
+            'component': self.component_label
+        })
         return labels
 
     def _build_pod_labels(self, extra_labels):
         labels = self._build_common_labels(extra_labels)
         labels.update({
-            'component': self.component_label
+            'hub.jupyter.org/servername': self.pod_name
         })
         return labels
 
@@ -1570,6 +1585,21 @@ class KubeSpawner(Spawner):
             annotations=annotations
         )
 
+    def get_service_manifest(self):
+        """
+        Make a service manifest that run a service for the pod.
+        """
+        labels = self._build_common_labels({})
+
+        annotations = self._build_common_annotations({})
+
+        return make_service(
+            name=self.pod_name,
+            port=self.port,
+            labels=labels,
+            annotations=annotations
+        )
+    
     def is_pod_running(self, pod):
         """
         Check if the given pod is running
@@ -1903,6 +1933,36 @@ class KubeSpawner(Spawner):
             else:
                 raise
 
+    async def _make_create_service_request(self, service, request_timeout):
+        # Try and create the service.
+        svc_name = service.metadata.name
+        try:
+            self.log.info(f"Attempting to create svc {svc_name}, with timeout {request_timeout}")
+            await gen.with_timeout(timedelta(seconds=request_timeout), self.asynchronize(
+                self.api.create_namespaced_service,
+                namespace=self.namespace,
+                body=service
+            ))
+            return True
+        except gen.TimeoutError:
+            # Just try again
+            return False
+        except ApiException as e:
+            if e.status == 409:
+                _, v, tb = sys.exc_info()
+                self.log.info("Svc " + svc_name + " already exists, so try to patch it.")
+                try:
+                    await gen.with_timeout(timedelta(seconds=request_timeout), self.asynchronize(
+                        self.api.patch_namespaced_service,
+                        namespace=self.namespace,
+                        body=service
+                    ))
+                except ApiException as e:
+                    raise v.with_traceback(tb)
+                return True
+            else:
+                raise
+
     async def _start(self):
         """Start the user's pod"""
 
@@ -1941,6 +2001,17 @@ class KubeSpawner(Spawner):
             f'Could not create pod {self.pod_name}',
             timeout=self.k8s_api_request_retry_timeout
         )
+
+        if self.services_enabled:
+            service = self.get_service_manifest()
+
+            # If there's a timeout, just let it propagate
+            await exponential_backoff(
+                partial(self._make_create_service_request, service, self.k8s_api_request_timeout),
+                f'Could not create service {self.pod_name}',
+                # Each req should be given k8s_api_request_timeout seconds.
+                timeout=self.k8s_api_request_retry_timeout
+            )
 
         # we need a timeout here even though start itself has a timeout
         # in order for this coroutine to finish at some point.
@@ -1985,7 +2056,10 @@ class KubeSpawner(Spawner):
         else:
             ip = pod["status"]["podIP"]
 
-        return (ip, self.port)
+        if self.services_enabled:
+            return (self.pod_name, self.port)
+        else:
+            return (ip, self.port)
 
     async def _make_delete_pod_request(self, pod_name, delete_options, grace_seconds, request_timeout):
         """
@@ -2003,6 +2077,14 @@ class KubeSpawner(Spawner):
                 body=delete_options,
                 grace_period_seconds=grace_seconds,
             ))
+            if self.services_enabled:
+                await gen.with_timeout(timedelta(seconds=request_timeout), self.asynchronize(
+                    self.api.delete_namespaced_service,
+                    name=pod_name,
+                    namespace=self.namespace,
+                    body=delete_options,
+                    grace_period_seconds=grace_seconds,
+                ))
             return True
         except gen.TimeoutError:
             return False
