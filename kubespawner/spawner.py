@@ -1471,7 +1471,7 @@ class KubeSpawner(Spawner):
     def _build_pod_labels(self, extra_labels):
         labels = self._build_common_labels(extra_labels)
         labels.update({
-            'hub.jupyter.org/server-name': self.pod_name
+            'hub.jupyter.org/servername': self.pod_name
         })
         return labels
 

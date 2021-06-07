@@ -624,7 +624,7 @@ def make_service(
             metadata=V1ObjectMeta(name=name, labels=labels, annotations=annotations),
             spec=V1ServiceSpec(
                 type='ClusterIP',
-                selector={'hub.jupyter.org/server-name': name},
+                selector={'hub.jupyter.org/servername': name},
                 ports=[V1ServicePort(port=port, target_port=port)]
             )
         )
