@@ -1471,7 +1471,7 @@ class KubeSpawner(Spawner):
     def _build_pod_labels(self, extra_labels):
         labels = self._build_common_labels(extra_labels)
         labels.update({
-            'hub.jupyter.org/servername': self.pod_name
+            'hub.jupyter.org/server-name': self.pod_name
         })
         return labels
 
@@ -1568,7 +1568,7 @@ class KubeSpawner(Spawner):
         """
         labels = self._build_common_labels(self._expand_all(self.storage_extra_labels))
         labels.update({
-            'component': 'singleuser-storage'
+            'component': "%s-storage" % self.component_label
         })
 
         annotations = self._build_common_annotations({})
