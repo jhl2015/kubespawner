@@ -1954,6 +1954,7 @@ class KubeSpawner(Spawner):
                 try:
                     await gen.with_timeout(timedelta(seconds=request_timeout), self.asynchronize(
                         self.api.patch_namespaced_service,
+                        name=svc_name,
                         namespace=self.namespace,
                         body=service
                     ))
