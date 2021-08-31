@@ -1950,17 +1950,16 @@ class KubeSpawner(Spawner):
         except ApiException as e:
             if e.status == 409:
                 _, v, tb = sys.exc_info()
-                self.log.info("Svc " + svc_name + " already exists, so try to patch it.")
+                self.log.info("Svc " + svc_name + " already exists, so try to delete it.")
                 try:
                     await gen.with_timeout(timedelta(seconds=request_timeout), self.asynchronize(
-                        self.api.patch_namespaced_service,
+                        self.api.delete_namespaced_service,
                         name=svc_name,
-                        namespace=self.namespace,
-                        body=service
+                        namespace=self.namespace
                     ))
                 except ApiException as e:
                     raise v.with_traceback(tb)
-                return True
+                return False
             else:
                 raise
 
